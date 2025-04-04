@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Remote Examination Portal</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .video-container {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 20px;
+        }
+        video {
+            background-color: #222;
+            border-radius: 8px;
+            margin: 10px;
+        }
+        #remoteVideo {
+            width: 800px;
+            height: 600px;
+        }
+        #localVideo {
+            width: 240px;
+            height: 180px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #e3f2fd;
+            border-radius: 5px;
+        }
+        .controls {
+            margin-top: 15px;
+        }
+        button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #2b6fd9;
+        }
+        .role-selector, .connection-panel {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .hidden {
+            display: none;
+        }
+        input {
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+        .session-info {
+            padding: 15px;
+            margin: 15px 0;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #4285f4;
+        }
+        .session-id {
+            font-family: monospace;
+            font-size: 24px;
+            color: #4285f4;
+            padding: 5px;
+            background-color: #e8f0fe;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Remote Examination Portal</h1>
+        
+        <!-- Role Selection Panel -->
+        <div class="role-selector" id="rolePanel">
+            <h3>Select your role:</h3>
+            <button id="examinerBtn">Examiner</button>
+            <button id="attendeeBtn">Attendee</button>
+        </div>
+        
+        <!-- Examiner Connection Panel -->
+        <div class="connection-panel hidden" id="examinerPanel">
+            <h3>Create Examination Session</h3>
+            <p>Create a new session and share the ID with your attendee:</p>
+            <button id="createSessionBtn">Create New Session</button>
+            
+            <div class="session-info hidden" id="sessionInfo">
+                <h4>Session Created!</h4>
+                <p>Share this session ID with your attendee:</p>
+                <div class="session-id" id="sessionIdDisplay"></div>
+                <p>Waiting for attendee to join...</p>
+            </div>
+        </div>
+        
+        <!-- Attendee Connection Panel -->
+        <div class="connection-panel hidden" id="attendeePanel">
+            <h3>Join Examination Session</h3>
+            <p>Enter the session ID provided by your examiner:</p>
+            <input type="text" id="sessionIdInput" placeholder="Enter Session ID" maxlength="6">
+            <button id="joinSessionBtn">Join Session</button>
+        </div>
+        
+        <div class="status" id="connectionStatus">
+            Please select your role above.
+        </div>
+        
+        <!-- Video Container (initially hidden) -->
+        <div class="video-container hidden" id="videoContainer">
+            <div>
+                <h3 id="remoteLabel">Remote Camera</h3>
+                <video id="remoteVideo" autoplay playsinline></video>
+            </div>
+            <div>
+                <h3>Your Camera</h3>
+                <video id="localVideo" autoplay playsinline muted></video>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="leaveBtn" disabled>End Session</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.js"></script>
+    <script>
+        // Global variables
+        let localStream;
+        let peerConnection;
+        let socket;
+        let userId;
+        let partnerId;
+        let userRole = null; // 'examiner' or 'attendee'
+        let sessionId = null;
+        
+        // DOM Elements
+        const rolePanel = document.getElementById('rolePanel');
+        const examinerPanel = document.getElementById('examinerPanel');
+        const attendeePanel = document.getElementById('attendeePanel');
+        const videoContainer = document.getElementById('videoContainer');
+        const sessionInfo = document.getElementById('sessionInfo');
+        const sessionIdDisplay = document.getElementById('sessionIdDisplay');
+        const sessionIdInput = document.getElementById('sessionIdInput');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const examinerBtn = document.getElementById('examinerBtn');
+        const attendeeBtn = document.getElementById('attendeeBtn');
+        const createSessionBtn = document.getElementById('createSessionBtn');
+        const joinSessionBtn = document.getElementById('joinSessionBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const remoteLabel = document.getElementById('remoteLabel');
+        
+        // WebRTC configuration
+        const peerConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+        
+        // Set user role
+        examinerBtn.addEventListener('click', () => {
+            userRole = 'examiner';
+            rolePanel.classList.add('hidden');
+            examinerPanel.classList.remove('hidden');
+            connectionStatus.textContent = 'You are set as an Examiner. Create a session to begin.';
+            remoteLabel.textContent = "Attendee's Camera";
+        });
+        
+        attendeeBtn.addEventListener('click', () => {
+            userRole = 'attendee';
+            rolePanel.classList.add('hidden');
+            attendeePanel.classList.remove('hidden');
+            connectionStatus.textContent = 'You are set as an Attendee. Enter a session ID to join.';
+            remoteLabel.textContent = "Examiner's Camera";
+        });
+        
+        // Create a new session (Examiner)
+        createSessionBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/dash_board/create-session', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                sessionId = data.session_id;
+                
+                // Display session ID
+                sessionIdDisplay.textContent = sessionId;
+                sessionInfo.classList.remove('hidden');
+                
+                // Initialize connection
+                initSocketConnection();
+                
+                // Join the session as examiner
+                await getLocalStream();
+                socket.emit('join_session', {
+                    session_id: sessionId,
+                    role: 'examiner'
+                });
+                
+                createSessionBtn.disabled = true;
+            } catch (err) {
+                console.error('Error creating session:', err);
+                connectionStatus.textContent = 'Error creating session. Please try again.';
+            }
+        });
+        
+        // Join an existing session (Attendee)
+        joinSessionBtn.addEventListener('click', async () => {
+            sessionId = sessionIdInput.value.trim().toUpperCase();
+            
+            if (!sessionId) {
+                connectionStatus.textContent = 'Please enter a valid session ID.';
+                return;
+            }
+            
+            try {
+                // Check if session exists
+                const response = await fetch(`/dash_board/check-session/${sessionId}`);
+                const data = await response.json();
+                
+                if (!data.exists) {
+                    connectionStatus.textContent = 'Session not found. Please check the ID and try again.';
+                    return;
+                }
+                
+                // Initialize connection
+                initSocketConnection();
+                
+                // Join the session as attendee
+                await getLocalStream();
+                socket.emit('join_session', {
+                    session_id: sessionId,
+                    role: 'attendee'
+                });
+                
+                joinSessionBtn.disabled = true;
+                sessionIdInput.disabled = true;
+            } catch (err) {
+                console.error('Error joining session:', err);
+                connectionStatus.textContent = 'Error joining session. Please try again.';
+            }
+        });
+        
+        // Initialize socket connection
+        function initSocketConnection() {
+            socket = io('/dashboard');
+            
+            socket.on('connect', () => {
+                connectionStatus.textContent = 'Connected to server.';
+            });
+            
+            socket.on('waiting_for_partner', (data) => {
+                connectionStatus.textContent = userRole === 'examiner' 
+                    ? 'Waiting for attendee to join with ID: ' + data.session_id
+                    : 'Waiting for examiner to connect...';
+            });
+            
+            socket.on('user_joined', async (data) => {
+                userId = data.user_id;
+                partnerId = data.partner_id;
+                
+                connectionStatus.textContent = userRole === 'examiner' 
+                    ? 'Attendee joined! Establishing connection...' 
+                    : 'Connected to examiner! Establishing connection...';
+                
+                // Show video container
+                videoContainer.classList.remove('hidden');
+                leaveBtn.disabled = false;
+                
+                await startPeerConnection();
+            });
+            
+            socket.on('offer', async (offer) => {
+                await handleReceivedOffer(offer);
+            });
+            
+            socket.on('answer', (answer) => {
+                handleReceivedAnswer(answer);
+            });
+            
+            socket.on('ice_candidate', (candidate) => {
+                handleReceivedIceCandidate(candidate);
+            });
+            
+            socket.on('partner_disconnected', () => {
+                connectionStatus.textContent = 'Your partner disconnected.';
+                endSession();
+            });
+            
+            socket.on('error', (data) => {
+                connectionStatus.textContent = 'Error: ' + data.message;
+            });
+            
+            socket.on('disconnect', () => {
+                connectionStatus.textContent = 'Disconnected from server.';
+                endSession();
+            });
+        }
+        
+        // Get local media stream
+        async function getLocalStream() {
+            try {
+                const constraints = {
+                    video: true,
+                    audio: userRole === 'attendee' // Only attendees need audio for questions
+                };
+                
+                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                localVideo.srcObject = localStream;
+                return true;
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                connectionStatus.textContent = 'Error accessing camera. Please check permissions.';
+                return false;
+            }
+        }
+        
+        // Start WebRTC peer connection
+        async function startPeerConnection() {
+            createPeerConnection();
+            
+            // Add local tracks to the connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+            
+            // Create and send offer if we're the examiner (initiator)
+            if (userRole === 'examiner') {
+                await createAndSendOffer();
+            }
+        }
+        
+        // Create peer connection with event handlers
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(peerConfig);
+            
+            // Handle ICE candidates
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice_candidate', {
+                        target: partnerId,
+                        candidate: event.candidate
+                    });
+                }
+            };
+            
+            // Handle connection state changes
+            peerConnection.onconnectionstatechange = (event) => {
+                if (peerConnection.connectionState === 'connected') {
+                    connectionStatus.textContent = userRole === 'examiner'
+                        ? 'Connected to attendee. You can now monitor their camera.'
+                        : 'Connected to examiner. Your camera is now being monitored.';
+                }
+            };
+            
+            // Handle receiving remote tracks
+            peerConnection.ontrack = (event) => {
+                if (event.streams && event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                }
+            };
+        }
+        
+        // Create and send WebRTC offer
+        async function createAndSendOffer() {
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('offer', {
+                    target: partnerId,
+                    offer: offer
+                });
+            } catch (err) {
+                console.error('Error creating offer:', err);
+            }
+        }
+        
+        // Handle received WebRTC offer
+        async function handleReceivedOffer(offer) {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                socket.emit('answer', {
+                    target: partnerId,
+                    answer: answer
+                });
+            } catch (err) {
+                console.error('Error handling offer:', err);
+            }
+        }
+        
+        // Handle received WebRTC answer
+        async function handleReceivedAnswer(answer) {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            } catch (err) {
+                console.error('Error handling answer:', err);
+            }
+        }
+        
+        // Handle received ICE candidate
+        async function handleReceivedIceCandidate(candidate) {
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (err) {
+                console.error('Error adding ICE candidate:', err);
+            }
+        }
+        
+        // End the session and clean up resources
+        function endSession() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+            
+            // Reset UI
+            videoContainer.classList.add('hidden');
+            
+            if (userRole === 'examiner') {
+                sessionInfo.classList.add('hidden');
+                createSessionBtn.disabled = false;
+            } else {
+                sessionIdInput.disabled = false;
+                joinSessionBtn.disabled = false;
+            }
+            
+            leaveBtn.disabled = true;
+        }
+        
+        // Handle leave button
+        leaveBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+            endSession();
+            connectionStatus.textContent = 'Session ended.';
+        });
+    </script>
+</body>
+</html>
