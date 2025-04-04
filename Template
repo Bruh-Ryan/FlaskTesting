@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+  background-color: rgb(0, 0, 0);
+  color: blue;
+}
+
+h1 {
+  background-color: black;
+  color: white;
+}
+
+a {
+  background-color: blue;
+  color: white;
+}
+</style>
+</head>
+<body>
+    <h1>Hello World!</h1>
+    <body>Welcome to CheatML Detector Project.</body>
+    
+    <a href="/about">Go to About Page</a>
+    <a href="/login">Go To Login Page</a>
+    
